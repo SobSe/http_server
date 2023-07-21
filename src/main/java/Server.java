@@ -1,9 +1,15 @@
+import org.apache.http.NameValuePair;
+import org.apache.http.client.utils.URLEncodedUtils;
+
 import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -42,37 +48,20 @@ public class Server {
 
             if (parts.length != 3) {
                 // just close socket
-                out.write((
-                        "HTTP/1.1 400 Bad request\r\n" +
-                                "Content-Length: 0\r\n" +
-                                "Connection: close\r\n" +
-                                "\r\n"
-                ).getBytes());
-                out.flush();
+                badRequest(out);
                 return;
             }
 
             if (handlers.get(parts[0]) == null) {
                 // just close socket
-                out.write((
-                        "HTTP/1.1 400 Bad request\r\n" +
-                                "Content-Length: 0\r\n" +
-                                "Connection: close\r\n" +
-                                "\r\n"
-                ).getBytes());
-                out.flush();
+                badRequest(out);
                 return;
             }
 
-            Request request = new Request(parts[0],parts[1]);
+            List<NameValuePair> params = URLEncodedUtils.parse(URI.create(parts[1]), StandardCharsets.UTF_8);
+            Request request = new Request(parts[0],parts[1], params);
             if (handlers.get(request.getTypeRequest()).get(request.getMethod()) == null) {
-                out.write((
-                        "HTTP/1.1 404 Not Found\r\n" +
-                                "Content-Length: 0\r\n" +
-                                "Connection: close\r\n" +
-                                "\r\n"
-                ).getBytes());
-                out.flush();
+                resorseNotFound(out);
                 return;
             }
             handlers.get(request.getTypeRequest())
@@ -87,6 +76,26 @@ public class Server {
                 e.printStackTrace();
             }
         }
+    }
+
+    private static void resorseNotFound(BufferedOutputStream out) throws IOException {
+        out.write((
+                "HTTP/1.1 404 Not Found\r\n" +
+                        "Content-Length: 0\r\n" +
+                        "Connection: close\r\n" +
+                        "\r\n"
+        ).getBytes());
+        out.flush();
+    }
+
+    private static void badRequest(BufferedOutputStream out) throws IOException {
+        out.write((
+                "HTTP/1.1 400 Bad request\r\n" +
+                        "Content-Length: 0\r\n" +
+                        "Connection: close\r\n" +
+                        "\r\n"
+        ).getBytes());
+        out.flush();
     }
 
     public void addHandler(String typeRequest, String method, Handler handler) {
