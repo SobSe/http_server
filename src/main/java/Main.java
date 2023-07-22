@@ -60,6 +60,18 @@ public class Main {
                     e.printStackTrace();
                 }
             });
+            server.addHandler("POST", "/", (request, responseStream) -> {
+                try {
+                    responseStream.write((
+                            "HTTP/1.1 200 OK\r\n" +
+                                    "Connection: close\r\n" +
+                                    "\r\n"
+                    ).getBytes());
+                    responseStream.flush();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            });
 
             server.start();
         } catch (IOException e) {

@@ -1,6 +1,7 @@
 import org.apache.http.NameValuePair;
 import org.apache.http.client.utils.URLEncodedUtils;
 
+import javax.lang.model.element.Name;
 import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -9,8 +10,10 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 
@@ -58,8 +61,19 @@ public class Server {
                 return;
             }
 
-            List<NameValuePair> params = URLEncodedUtils.parse(URI.create(parts[1]), StandardCharsets.UTF_8);
-            Request request = new Request(parts[0],parts[1], params);
+            String header = null;
+            List<String> headers = new ArrayList<>();
+            while(!(header = in.readLine()).equals("")) {
+                headers.add(header);
+            }
+
+            Optional<String> contentType = extractHeader(headers, "Content-Type");
+            Optional<String> contentLength = extractHeader(headers, "Content-Length");
+            URI path = URI.create(parts[1]);
+            List<NameValuePair> paramsQuery = URLEncodedUtils.parse(path, StandardCharsets.UTF_8);
+            List<NameValuePair> paramsPost = getParamsPost(in, contentType, contentLength);
+
+            Request request = new Request(parts[0],path.getPath(), paramsQuery, paramsPost);
             if (handlers.get(request.getTypeRequest()).get(request.getMethod()) == null) {
                 resorseNotFound(out);
                 return;
@@ -76,6 +90,29 @@ public class Server {
                 e.printStackTrace();
             }
         }
+    }
+
+    private static List<NameValuePair> getParamsPost(BufferedReader in, Optional<String> contentType, Optional<String> contentLength) throws IOException {
+        List<NameValuePair> paramsPost = null;
+        if (contentType.isPresent()) {
+            if (contentType.get().equals("application/x-www-form-urlencoded")) {
+                if (contentLength.isPresent()) {
+                    char[] cbuf = new char[Integer.parseInt(contentLength.get())];
+                    int count = in.read(cbuf);
+                    String stringParams = String.valueOf(cbuf);
+                    paramsPost = URLEncodedUtils.parse(stringParams, StandardCharsets.UTF_8);
+                }
+            }
+        }
+        return paramsPost;
+    }
+
+    private Optional<String> extractHeader(List<String> headers, String header) {
+        return headers.stream()
+                .filter(o -> o.startsWith(header))
+                .map(o -> o.substring(o.indexOf(" ")))
+                .map(String::trim)
+                .findFirst();
     }
 
     private static void resorseNotFound(BufferedOutputStream out) throws IOException {
