@@ -1,19 +1,12 @@
 import org.apache.http.NameValuePair;
 import org.apache.http.client.utils.URLEncodedUtils;
 
-import javax.lang.model.element.Name;
-import java.io.BufferedOutputStream;
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
+import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 
@@ -41,12 +34,27 @@ public class Server {
 
     private void executeRequest(Socket client) {
         try (
-                final var in = new BufferedReader(new InputStreamReader(client.getInputStream()));
+                final var in = new BufferedInputStream(client.getInputStream());
                 final var out = new BufferedOutputStream(client.getOutputStream())
         ) {
+            // лимит на request line + заголовки
+            final var limit = 4096;
+
+            in.mark(limit);
+            final var buffer = new byte[limit];
+            final var read = in.read(buffer);
+
+            // ищем request line
+            final var requestLineDelimiter = new byte[]{'\r', '\n'};
+            final var requestLineEnd = indexOf(buffer, requestLineDelimiter, 0, read);
+            if (requestLineEnd == -1) {
+                badRequest(out);
+                return;
+            }
+
             // read only request line for simplicity
             // must be in form GET /path HTTP/1.1
-            final var requestLine = in.readLine();
+            final var requestLine = new String(Arrays.copyOf(buffer, requestLineEnd));
             final var parts = requestLine.split(" ");
 
             if (parts.length != 3) {
@@ -61,19 +69,41 @@ public class Server {
                 return;
             }
 
-            String header = null;
-            List<String> headers = new ArrayList<>();
-            while(!(header = in.readLine()).equals("")) {
-                headers.add(header);
+            final var headersDelimiter = new byte[]{'\r', '\n', '\r', '\n'};
+            final var headersStart = requestLineEnd + requestLineDelimiter.length;
+            final var headersEnd = indexOf(buffer, headersDelimiter, headersStart, read);
+            if (headersEnd == -1) {
+                badRequest(out);
+                return;
             }
+
+            // отматываем на начало буфера
+            in.reset();
+            // пропускаем requestLine
+            in.skip(headersStart);
+
+            final var headersBytes = in.readNBytes(headersEnd - headersStart);
+            final var headers = Arrays.asList(new String(headersBytes).split("\r\n"));
 
             Optional<String> contentType = extractHeader(headers, "Content-Type");
             Optional<String> contentLength = extractHeader(headers, "Content-Length");
             URI path = URI.create(parts[1]);
             List<NameValuePair> paramsQuery = URLEncodedUtils.parse(path, StandardCharsets.UTF_8);
-            List<NameValuePair> paramsPost = getParamsPost(in, contentType, contentLength);
+            List<NameValuePair> paramsPost = getParamsPost(in
+                    , contentType.orElse(null)
+                    , contentLength.orElse(null)
+                    , headersDelimiter
+            );
 
-            Request request = new Request(parts[0],path.getPath(), paramsQuery, paramsPost);
+            Request request = new Request(parts[0],
+                    path.getPath(),
+                    paramsQuery,
+                    paramsPost,
+                    in,
+                    contentType.orElse(null),
+                    contentLength.orElse(null)
+            );
+
             if (handlers.get(request.getTypeRequest()).get(request.getMethod()) == null) {
                 resorseNotFound(out);
                 return;
@@ -92,15 +122,21 @@ public class Server {
         }
     }
 
-    private static List<NameValuePair> getParamsPost(BufferedReader in, Optional<String> contentType, Optional<String> contentLength) throws IOException {
+    private static List<NameValuePair> getParamsPost(BufferedInputStream in,
+                                                     String contentType,
+                                                     String contentLength,
+                                                     byte[] headersDelimiter
+    ) throws IOException {
         List<NameValuePair> paramsPost = null;
-        if (contentType.isPresent()) {
-            if (contentType.get().equals("application/x-www-form-urlencoded")) {
-                if (contentLength.isPresent()) {
-                    char[] cbuf = new char[Integer.parseInt(contentLength.get())];
-                    int count = in.read(cbuf);
-                    String stringParams = String.valueOf(cbuf);
-                    paramsPost = URLEncodedUtils.parse(stringParams, StandardCharsets.UTF_8);
+        if (contentType != null) {
+            if (contentType.startsWith("application/x-www-form-urlencoded")) {
+                if (contentLength != null) {
+                    in.skip(headersDelimiter.length);
+                    // вычитываем Content-Length, чтобы прочитать body
+                    final var length = Integer.parseInt(contentLength);
+                    final var bodyBytes = in.readNBytes(length);
+                    final var body = new String(bodyBytes);
+                    paramsPost = URLEncodedUtils.parse(body, StandardCharsets.UTF_8);
                 }
             }
         }
@@ -142,5 +178,19 @@ public class Server {
             handlers.put(typeRequest, currentHandlers);
         }
         currentHandlers.put(method, handler);
+    }
+
+    // from Google guava with modifications
+    private static int indexOf(byte[] array, byte[] target, int start, int max) {
+        outer:
+        for (int i = start; i < max - target.length + 1; i++) {
+            for (int j = 0; j < target.length; j++) {
+                if (array[i + j] != target[j]) {
+                    continue outer;
+                }
+            }
+            return i;
+        }
+        return -1;
     }
 }
