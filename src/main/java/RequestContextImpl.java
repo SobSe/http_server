@@ -4,10 +4,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.Arrays;
 
-public class RequestRequestContext implements UploadContext {
-    private final Request request;
+public class RequestContextImpl implements UploadContext {
+    private final RequestParser request;
 
-    public RequestRequestContext(Request request) {
+    public RequestContextImpl(RequestParser request) {
         this.request = request;
     }
 
